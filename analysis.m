@@ -1,194 +1,108 @@
 %% ============================================
-% Plot Settings
+% Airflow Analysis
 % ============================================
+%
+% Everything you normally edit lives in this file: the SIGNALS table, the
+% BANDS table and the labels below.  The figure itself is built by
+% interactivePlot.m, which adds a checkbox per signal and per band so you
+% can show and hide traces directly from the figure window.
+%
+% ---- Adding an input -----------------------------------------------
+%
+% Add one row to SIGNALS:
+%
+%   'My Label'   'simOut.mySignal'   '-'   2   []   true
+%    ^label       ^source             ^style ^width ^color ^on at startup
+%
+% Only the first two columns matter; leave a cell as [] for the default
+% (solid line, width 2, next palette color, visible).  The source is either
+% the name of anything in the base workspace ('simOut.SSFlow', 'in.foo') or
+% the data itself.  timeseries, timetable, Simulink signals, structs with
+% .Time/.Data and Nx2 [time value] matrices are all accepted.
+%
+% Add one row to BANDS for a new shaded timer region:
+%
+%   'My Timer'   'simOut.myStart'   'simOut.myExpired'   [0 0.6 0.4]   true
+%
+% Bands run from each rising edge of the start flag to the next rising edge
+% of the stop flag.  Where any two bands overlap is shaded separately, with
+% its own checkbox.
+%
+% A source that is missing or unreadable is skipped with a warning rather
+% than erroring, so a partially populated workspace still plots.
+% ---------------------------------------------------------------------
 
 close all
 clc
 
-SHOW_SSFLOW      = true;
-SHOW_LEAD_SS     = false;
-SHOW_DP1_SS      = true;
-SHOW_DP2_SS      = false;
-SHOW_DP3_SS      = false;
-SHOW_DP4_SS      = false;
-
-SHOW_LEAD_AF     = false;
-SHOW_DP1_AF      = true;
-
-SHOW_TIMER_BANDS = true;
-
 %% ============================================
-% Create Figure
+% Signals
 % ============================================
+%
+%   Label              Source                     Style  Width  Color  Show
 
-figure('Name','Airflow Analysis',...
-       'Color','w',...
-       'Position',[100 100 1500 800]);
-
-hold on
-grid on
-box on
-
-%% ============================================
-% Plot Signals
-% ============================================
-
-if SHOW_SSFLOW
-    plot(simOut.SSFlow.Time,...
-         simOut.SSFlow.Data,...
-         'LineWidth',4,...
-         'DisplayName','SSFlow');
-end
-
-if SHOW_LEAD_SS
-    plot(simOut.LeadSS.Time,...
-         simOut.LeadSS.Data,...
-         '--',...
-         'LineWidth',2,...
-         'DisplayName','LeadSS');
-end
-
-if SHOW_DP1_SS
-    plot(simOut.dpRem1SS.Time,...
-         simOut.dpRem1SS.Data,...
-         ':',...
-         'LineWidth',3,...
-         'DisplayName','DP1SS');
-end
-
-if SHOW_DP2_SS
-    plot(simOut.dpRem2SS.Time,...
-         simOut.dpRem2SS.Data,...
-         'LineWidth',2,...
-         'DisplayName','DP2SS');
-end
-
-if SHOW_DP3_SS
-    plot(simOut.dpRem3SS.Time,...
-         simOut.dpRem3SS.Data,...
-         'LineWidth',2,...
-         'DisplayName','DP3SS');
-end
-
-if SHOW_DP4_SS
-    plot(simOut.dpRem4SS.Time,...
-         simOut.dpRem4SS.Data,...
-         'LineWidth',2,...
-         'DisplayName','DP4SS');
-end
-
-if SHOW_LEAD_AF
-    plot(in.eabAirFlow.Time,...
-         in.eabAirFlow.Data,...
-         'k--',...
-         'LineWidth',3,...
-         'DisplayName','Lead Air Flow');
-end
-
-if SHOW_DP1_AF
-    plot(in.dpRem1AirFlow.Time,...
-         in.dpRem1AirFlow.Data,...
-         'k:',...
-         'LineWidth',3,...
-         'DisplayName','DP1 Air Flow');
-end
-
-%% ============================================
-% Formatting
-% ============================================
-
-xlabel('Time (s)')
-ylabel('Air Flow')
-title('Steady State Air Flow Comparison')
-
-legend('Location','eastoutside')
+SIGNALS = {
+    'SSFlow'           'simOut.SSFlow'            '-'    3.0    []     true
+    'LeadSS'           'simOut.LeadSS'            '--'   2.0    []     false
+    'DP1SS'            'simOut.dpRem1SS'          ':'    2.5    []     true
+    'DP2SS'            'simOut.dpRem2SS'          '-'    2.0    []     false
+    'DP3SS'            'simOut.dpRem3SS'          '-'    2.0    []     false
+    'DP4SS'            'simOut.dpRem4SS'          '-'    2.0    []     false
+    'Lead Air Flow'    'in.eabAirFlow'            '--'   2.5    [0.15 0.15 0.15]  false
+    'DP1 Air Flow'     'in.dpRem1AirFlow'         ':'    2.5    [0.15 0.15 0.15]  true
+    };
 
 %% ============================================
 % Timer Bands
 % ============================================
+%
+%   Label          Start flag                 Stop flag                      Color            Show
 
-if SHOW_TIMER_BANDS
-
-    yl = ylim;
-
-    leadStarts = simOut.LeadTimerStart.Time( ...
-        simOut.LeadTimerStart.Data ~= 0);
-
-    leadExpires = simOut.LeadTimerExpired.Time( ...
-        simOut.LeadTimerExpired.Data ~= 0);
-
-    dp1Starts = simOut.DPTimer1Start.Time( ...
-        simOut.DPTimer1Start.Data ~= 0);
-
-    dp1Expires = simOut.dpRem1TimerExpired.Time( ...
-        simOut.dpRem1TimerExpired.Data ~= 0);
-
-    %% Lead Bands
-
-    for k = 1:min(numel(leadStarts),numel(leadExpires))
-
-        patch( ...
-            [leadStarts(k) leadExpires(k) leadExpires(k) leadStarts(k)], ...
-            [yl(1) yl(1) yl(2) yl(2)], ...
-            [0 1 0], ...
-            'FaceAlpha',0.15,...
-            'EdgeColor','none',...
-            'HandleVisibility','off');
-
-    end
-
-    %% DP1 Bands
-
-    for k = 1:min(numel(dp1Starts),numel(dp1Expires))
-
-        patch( ...
-            [dp1Starts(k) dp1Expires(k) dp1Expires(k) dp1Starts(k)], ...
-            [yl(1) yl(1) yl(2) yl(2)], ...
-            [0 0 1], ...
-            'FaceAlpha',0.15,...
-            'EdgeColor','none',...
-            'HandleVisibility','off');
-
-    end
-
-    %% Overlap Bands
-
-    for i = 1:min(numel(leadStarts),numel(leadExpires))
-
-        for j = 1:min(numel(dp1Starts),numel(dp1Expires))
-
-            overlapStart = max(leadStarts(i),dp1Starts(j));
-            overlapEnd   = min(leadExpires(i),dp1Expires(j));
-
-            if overlapEnd > overlapStart
-
-                patch( ...
-                    [overlapStart overlapEnd overlapEnd overlapStart], ...
-                    [yl(1) yl(1) yl(2) yl(2)], ...
-                    [1 0 0], ...
-                    'FaceAlpha',0.25,...
-                    'EdgeColor','none',...
-                    'HandleVisibility','off');
-
-            end
-
-        end
-
-    end
-
-end
+BANDS = {
+    'Lead timer'   'simOut.LeadTimerStart'    'simOut.LeadTimerExpired'      [0.20 0.70 0.30]  true
+    'DP1 timer'    'simOut.DPTimer1Start'     'simOut.dpRem1TimerExpired'    [0.20 0.40 0.90]  true
+    };
 
 %% ============================================
-% Data Tips
+% Build the figure
 % ============================================
 
-datacursormode on
+cfg              = struct();
+cfg.Name         = 'Airflow Analysis';
+cfg.Title        = 'Steady State Air Flow Comparison';
+cfg.XLabel       = 'Time (s)';
+cfg.YLabel       = 'Air Flow';
+cfg.Signals      = SIGNALS;
+cfg.Bands        = BANDS;
+cfg.ShowOverlaps = true;
+
+fig = interactivePlot(cfg);
 
 %% ============================================
 % Debug Output
 % ============================================
 
-fprintf('Lead Starts   : %d\n',nnz(simOut.LeadTimerStart.Data));
-fprintf('Lead Expires  : %d\n',nnz(simOut.LeadTimerExpired.Data));
-fprintf('DP1 Starts    : %d\n',nnz(simOut.DPTimer1Start.Data));
-fprintf('DP1 Expires   : %d\n',nnz(simOut.dpRem1TimerExpired.Data));
+for k = 1:size(BANDS,1)
+
+    startCount = edgeCount(BANDS{k,2});
+    stopCount  = edgeCount(BANDS{k,3});
+
+    fprintf('%-12s starts: %-4s expires: %s\n', ...
+            BANDS{k,1},num2str(startCount),num2str(stopCount));
+
+end
+
+function n = edgeCount(source)
+%EDGECOUNT  Rising edges of a flag in the base workspace ('?' if missing).
+
+n = '?';
+
+try
+    value = evalin('base',source);
+    data  = value.Data(:) ~= 0;
+    n     = nnz(data & [true; ~data(1:end-1)]);
+catch
+    % Signal not in the workspace; leave the count as '?'.
+end
+
+end
