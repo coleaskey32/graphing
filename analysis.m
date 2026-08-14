@@ -2,59 +2,50 @@
 % Airflow Analysis
 % ============================================
 %
-% Everything you normally edit lives in this file: the SIGNALS table, the
-% BANDS table and the labels below.  The figure itself is built by
-% interactivePlot.m, which adds a checkbox per signal and per band so you
-% can show and hide traces directly from the figure window.
+% Every timeseries inside SOURCE is found automatically and gets a checkbox
+% in the figure window, so there is no signal list to maintain here.  Log a
+% new signal in the model and it shows up the next time you run this.
 %
-% ---- Adding an input -----------------------------------------------
+% Toggle traces on and off from the panel on the right of the figure.
 %
-% Add one row to SIGNALS:
-%
-%   'My Label'   'simOut.mySignal'   '-'   2   []   true
-%    ^label       ^source             ^style ^width ^color ^on at startup
-%
-% Only the first two columns matter; leave a cell as [] for the default
-% (solid line, width 2, next palette color, visible).  The source is either
-% the name of anything in the base workspace ('simOut.SSFlow', 'in.foo') or
-% the data itself.  timeseries, timetable, Simulink signals, structs with
-% .Time/.Data and Nx2 [time value] matrices are all accepted.
-%
-% Add one row to BANDS for a new shaded timer region:
-%
-%   'My Timer'   'simOut.myStart'   'simOut.myExpired'   [0 0.6 0.4]   true
-%
-% Bands run from each rising edge of the start flag to the next rising edge
-% of the stop flag.  Where any two bands overlap is shaded separately, with
-% its own checkbox.
-%
-% A source that is missing or unreadable is skipped with a warning rather
-% than erroring, so a partially populated workspace still plots.
+% The settings below are optional -- running this file as-is plots
+% everything in simOut.
 % ---------------------------------------------------------------------
 
 close all
 clc
 
 %% ============================================
-% Signals
+% Settings
 % ============================================
+
+% Where the signals come from: any struct, Dataset or SimulationOutput.
+% Nested structs are searched too, and get dotted names ('logsout.mySignal').
+SOURCE = 'simOut';
+
+% Which signals start out visible.  Names or wildcards, case-insensitive:
 %
-%   Label              Source                           Style  Width  Color  Show
+%   SHOW_AT_START = {'*AirFlow*','*Valid*'};
+%
+% Leave it empty to start with all of them on, then use the checkboxes (or
+% the Hide all button) to narrow things down.
+SHOW_AT_START = {};
 
-SIGNALS = {
-    'LeadSS'           'simOut.LeadSteadyStateAirFlow'      '--'   2.0    []                false
-    'DP1SS'            'simOut.dp1SteadyStateAirFlow'       ':'    2.5    []                true
-    'DP2SS'            'simOut.dpRem2SS'                    '-'    2.0    []                false
-    'DP3SS'            'simOut.dpRem3SS'                    '-'    2.0    []                false
-    'DP4SS'            'simOut.dpRem4SS'                    '-'    2.0    []                false
-    'Lead Air Flow'    'in.eabAirFlow'                      '--'   2.5    [0.15 0.15 0.15]  false
-    'DP1 Air Flow'     'in.dpRem1AirFlow'                   ':'    2.5    [0.15 0.15 0.15]  true
-    'Lead SS Valid'    'simOut.steadyAirFlowValidLatched'   '-'    2.5    []                true
-    'DP1 SS Valid'     'simOut.dp1SsValueValid'             ':'    2.5    []                true
-    'High Flow Detected' 'simout.highFlowDetected'          '--'   3.0    [0 0.8 0]         true
-    'Low Flow Detected' 'simout.LowFlowDetected'            '--'   3.0    [0 0 0.8]         true
-    };
+% Signals to leave out of the figure entirely.  Wildcards allowed, e.g.
+% IGNORE = {'*Timer*','*Debug*'};
+IGNORE = {};
 
+%% ============================================
+% Collect the signals
+% ============================================
+
+SIGNALS = collectTimeseries(SOURCE,SHOW_AT_START,IGNORE);
+
+% Anything outside SOURCE can still be added by hand.  Same columns as
+% before -- label, source, style, width, color, visible at startup:
+%
+% SIGNALS = [SIGNALS
+%     {'Lead Air Flow'  'in.eabAirFlow'  '--'  2.5  [0.15 0.15 0.15]  true}];
 
 %% ============================================
 % Build the figure
@@ -68,33 +59,31 @@ cfg.YLabel       = 'Air Flow';
 cfg.Signals      = SIGNALS;
 cfg.ShowOverlaps = true;
 
+% Shaded timer windows are still supported -- uncomment and add a row per
+% window.  Each one runs from a rising edge of the start flag to the next
+% rising edge of the stop flag, and gets its own checkbox:
+%
+% cfg.Bands = {
+%     'Lead timer'  'simOut.LeadTimerStart'  'simOut.LeadTimerExpired'    [0.20 0.70 0.30]  true
+%     'DP1 timer'   'simOut.DPTimer1Start'   'simOut.dpRem1TimerExpired'  [0.20 0.40 0.90]  true
+%     };
+
 fig = interactivePlot(cfg);
 
 %% ============================================
 % Debug Output
 % ============================================
 
-for k = 1:size(BANDS,1)
+fprintf('Found %d signals in %s:\n',size(SIGNALS,1),SOURCE);
 
-    startCount = edgeCount(BANDS{k,2});
-    stopCount  = edgeCount(BANDS{k,3});
+for k = 1:size(SIGNALS,1)
 
-    fprintf('%-12s starts: %-4s expires: %s\n', ...
-            BANDS{k,1},num2str(startCount),num2str(stopCount));
+    if SIGNALS{k,6}
+        state = 'on ';
+    else
+        state = 'off';
+    end
 
-end
-
-function n = edgeCount(source)
-%EDGECOUNT  Rising edges of a flag in the base workspace ('?' if missing).
-
-n = '?';
-
-try
-    value = evalin('base',source);
-    data  = value.Data(:) ~= 0;
-    n     = nnz(data & [true; ~data(1:end-1)]);
-catch
-    % Signal not in the workspace; leave the count as '?'.
-end
+    fprintf('  [%s] %s\n',state,SIGNALS{k,1});
 
 end
