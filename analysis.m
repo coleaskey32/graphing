@@ -39,29 +39,22 @@ clc
 % Signals
 % ============================================
 %
-%   Label              Source                     Style  Width  Color  Show
+%   Label              Source                           Style  Width  Color  Show
 
 SIGNALS = {
-    'SSFlow'           'simOut.SSFlow'            '-'    3.0    []     true
-    'LeadSS'           'simOut.LeadSS'            '--'   2.0    []     false
-    'DP1SS'            'simOut.dpRem1SS'          ':'    2.5    []     true
-    'DP2SS'            'simOut.dpRem2SS'          '-'    2.0    []     false
-    'DP3SS'            'simOut.dpRem3SS'          '-'    2.0    []     false
-    'DP4SS'            'simOut.dpRem4SS'          '-'    2.0    []     false
-    'Lead Air Flow'    'in.eabAirFlow'            '--'   2.5    [0.15 0.15 0.15]  false
-    'DP1 Air Flow'     'in.dpRem1AirFlow'         ':'    2.5    [0.15 0.15 0.15]  true
+    'LeadSS'           'simOut.LeadSteadyStateAirFlow'      '--'   2.0    []                false
+    'DP1SS'            'simOut.dp1SteadyStateAirFlow'       ':'    2.5    []                true
+    'DP2SS'            'simOut.dpRem2SS'                    '-'    2.0    []                false
+    'DP3SS'            'simOut.dpRem3SS'                    '-'    2.0    []                false
+    'DP4SS'            'simOut.dpRem4SS'                    '-'    2.0    []                false
+    'Lead Air Flow'    'in.eabAirFlow'                      '--'   2.5    [0.15 0.15 0.15]  false
+    'DP1 Air Flow'     'in.dpRem1AirFlow'                   ':'    2.5    [0.15 0.15 0.15]  true
+    'Lead SS Valid'    'simOut.steadyAirFlowValidLatched'   '-'    2.5    []                true
+    'DP1 SS Valid'     'simOut.dp1SsValueValid'             ':'    2.5    []                true
+    'High Flow Detected' 'simout.highFlowDetected'          '--'   3.0    [0 0.8 0]         true
+    'Low Flow Detected' 'simout.LowFlowDetected'            '--'   3.0    [0 0 0.8]         true
     };
 
-%% ============================================
-% Timer Bands
-% ============================================
-%
-%   Label          Start flag                 Stop flag                      Color            Show
-
-BANDS = {
-    'Lead timer'   'simOut.LeadTimerStart'    'simOut.LeadTimerExpired'      [0.20 0.70 0.30]  true
-    'DP1 timer'    'simOut.DPTimer1Start'     'simOut.dpRem1TimerExpired'    [0.20 0.40 0.90]  true
-    };
 
 %% ============================================
 % Build the figure
@@ -73,7 +66,6 @@ cfg.Title        = 'Steady State Air Flow Comparison';
 cfg.XLabel       = 'Time (s)';
 cfg.YLabel       = 'Air Flow';
 cfg.Signals      = SIGNALS;
-cfg.Bands        = BANDS;
 cfg.ShowOverlaps = true;
 
 fig = interactivePlot(cfg);
