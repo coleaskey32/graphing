@@ -2,14 +2,16 @@
 % Airflow Analysis
 % ============================================
 %
-% Every timeseries inside SOURCE is found automatically and gets a checkbox
-% in the figure window, so there is no signal list to maintain here.  Log a
-% new signal in the model and it shows up the next time you run this.
+% Every timeseries inside SOURCES is found automatically and gets a row in
+% the figure window, so there is no signal list to maintain here.  Log a new
+% signal in the model and it shows up the next time you run this.
 %
-% Toggle traces on and off from the panel on the right of the figure.
+% In the figure, each signal has a checkbox to show or hide it, a dropdown
+% for its line style and a spinner for its width; the panel scrolls when
+% there are more signals than fit.  Hovering over a trace names it.
 %
 % The settings below are optional -- running this file as-is plots
-% everything in simOut.
+% everything in simOut and in.
 % ---------------------------------------------------------------------
 
 close all
@@ -19,13 +21,17 @@ clc
 % Settings
 % ============================================
 
-% Where the signals come from: any struct, Dataset or SimulationOutput.
-% Nested structs are searched too, and get dotted names ('logsout.mySignal').
-SOURCE = 'simOut';
+% Where the signals come from.  Each entry is any struct, Dataset or
+% SimulationOutput; add another name here to pull in another one.  Signals
+% are labelled by their source ('simOut.SSFlow', 'in.eabAirFlow') and get
+% their own heading in the figure.  Nested structs are searched too.
+SOURCES = {'simOut','in'};
 
-% Which signals start out visible.  Names or wildcards, case-insensitive:
+% Which signals start out visible.  Names or wildcards, case-insensitive,
+% matched against the full label or just the signal name:
 %
-%   SHOW_AT_START = {'*AirFlow*','*Valid*'};
+%   SHOW_AT_START = {'*AirFlow*','*Valid*'};   % by name
+%   SHOW_AT_START = {'simOut.*'};              % everything from one source
 %
 % Leave it empty to start with all of them on, then use the checkboxes (or
 % the Hide all button) to narrow things down.
@@ -39,9 +45,9 @@ IGNORE = {};
 % Collect the signals
 % ============================================
 
-SIGNALS = collectTimeseries(SOURCE,SHOW_AT_START,IGNORE);
+SIGNALS = collectTimeseries(SOURCES,SHOW_AT_START,IGNORE);
 
-% Anything outside SOURCE can still be added by hand.  Same columns as
+% Anything outside SOURCES can still be added by hand.  Same columns as
 % before -- label, source, style, width, color, visible at startup:
 %
 % SIGNALS = [SIGNALS
@@ -74,7 +80,7 @@ fig = interactivePlot(cfg);
 % Debug Output
 % ============================================
 
-fprintf('Found %d signals in %s:\n',size(SIGNALS,1),SOURCE);
+fprintf('Found %d signals in %s:\n',size(SIGNALS,1),strjoin(SOURCES,', '));
 
 for k = 1:size(SIGNALS,1)
 

@@ -2,9 +2,14 @@ function fig = interactivePlot(cfg)
 %INTERACTIVEPLOT  Modern time-series figure with live show/hide toggles.
 %
 %   fig = interactivePlot(cfg) builds a uifigure containing an axes and a
-%   side panel of checkboxes.  Every signal and every timer band gets its
-%   own checkbox, so traces can be toggled on and off from the figure
-%   window without re-running the script.
+%   scrolling side panel.  Every signal gets a row there with a checkbox, a
+%   line style dropdown and a width spinner, so traces can be shown, hidden
+%   and restyled from the figure window without re-running the script.
+%   Timer bands get a checkbox each.
+%
+%   Signals whose labels are dotted ('simOut.SSFlow') are grouped in the
+%   panel under the part before the first dot, and the rest of the label is
+%   shown in the row.  Hovering over a trace shows a data tip naming it.
 %
 %   cfg fields (all optional except Signals):
 %
@@ -18,6 +23,9 @@ function fig = interactivePlot(cfg)
 %                 {Label, StartSource, StopSource, Color, ShowByDefault}
 %               Bands are drawn from each rising edge of StartSource to the
 %               next rising edge of StopSource.
+%
+%     MaxLegend     hide the legend once more than this many traces are
+%                   visible, since it would cover the plot (default 15)
 %
 %     ShowOverlaps  logical, shade where two bands overlap (default true)
 %     OverlapColor  RGB for the overlap shading (default red)
@@ -58,7 +66,8 @@ palette = [ 0.00 0.45 0.70
             0.84 0.37 0.00
             0.94 0.89 0.26 ];
 
-BAND_Y = 1e9;    % bands are drawn tall and clipped to the current y-limits
+BAND_Y      = 1e9;   % bands are drawn tall and clipped to the current y-limits
+MAX_LEGEND  = getOpt(cfg,'MaxLegend',15);   % above this, the legend is hidden
 
 %% ------------------------------------------------------------------
 % Window and layout
@@ -67,7 +76,7 @@ BAND_Y = 1e9;    % bands are drawn tall and clipped to the current y-limits
 fig = uifigure('Name',figName,'Color','w','Position',[100 100 1500 820]);
 
 layout = uigridlayout(fig,[1 2]);
-layout.ColumnWidth   = {'1x',250};
+layout.ColumnWidth   = {'1x',340};
 layout.RowHeight     = {'1x'};
 layout.Padding       = [14 14 14 14];
 layout.ColumnSpacing = 14;
@@ -113,6 +122,8 @@ for k = 1:size(sigSpecs,1)
 
     visible   = logical(defaultIfEmpty(spec{6},true));
     h.Visible = onOff(visible);
+
+    nameDataTip(h,label);
 
     signals(end+1) = struct('label',label, ...
                             'handle',h, ...
@@ -179,19 +190,39 @@ sendBandsToBack(ax)
 % The panel contents are described first so the grid can be sized before
 % any child claims a row (uigridlayout rejects out-of-range Layout.Row).
 
-items = struct('kind',{},'label',{},'value',{},'callback',{});
+items = struct('kind',{},'label',{},'value',{},'callback',{},'index',{});
+
+% Signals are grouped by the first part of their dotted label, so signals
+% pulled from different containers ('simOut.x', 'in.y') get their own
+% headings.  Labels without a dot all sit under one heading.
 
 if ~isempty(signals)
-    items(end+1) = item('header','Signals');
-    for k = 1:numel(signals)
-        items(end+1) = item('signal',signals(k).label,signals(k).visible); %#ok<AGROW>
+
+    groups    = cellfun(@groupOf,{signals.label},'UniformOutput',false);
+    groupList = unique(groups,'stable');
+
+    for g = 1:numel(groupList)
+
+        heading = groupList{g};
+        if isempty(heading)
+            heading = 'Signals';
+        end
+
+        items(end+1) = item('header',heading); %#ok<AGROW>
+
+        for k = find(strcmp(groups,groupList{g}))
+            items(end+1) = item('signal',displayLabel(signals(k).label), ...
+                                signals(k).visible,[],k); %#ok<AGROW>
+        end
+
     end
+
 end
 
 if ~isempty(bands)
     items(end+1) = item('header','Timer bands');
     for k = 1:numel(bands)
-        items(end+1) = item('band',bands(k).label,bands(k).visible); %#ok<AGROW>
+        items(end+1) = item('band',bands(k).label,bands(k).visible,[],k); %#ok<AGROW>
     end
 end
 
@@ -211,23 +242,26 @@ for k = 1:numel(items)
     switch items(k).kind
         case 'header', heights{k} = 26;
         case 'button', heights{k} = 30;
+        case 'signal', heights{k} = 26;
         otherwise    , heights{k} = 24;
     end
 end
 
-controls = uigridlayout(sidePanel,[numel(items) 1]);
-controls.ColumnWidth     = {'1x'};
+% Column 1 is the name and its checkbox, columns 2 and 3 are the per-line
+% style and width controls.  The panel scrolls once the rows overflow.
+
+controls = uigridlayout(sidePanel,[numel(items) 3]);
+controls.ColumnWidth     = {'1x',62,68};
 controls.RowHeight       = heights;
 controls.Padding         = [4 4 4 4];
-controls.RowSpacing      = 6;
+controls.RowSpacing      = 4;
+controls.ColumnSpacing   = 4;
 controls.Scrollable      = 'on';
 trySet(controls,'BackgroundColor','w');
 
 sigBoxes   = gobjects(1,numel(signals));
 bandBoxes  = gobjects(1,numel(bands));
 overlapBox = gobjects(0);
-sigIdx     = 0;
-bandIdx    = 0;
 
 for k = 1:numel(items)
 
@@ -235,26 +269,30 @@ for k = 1:numel(items)
 
         case 'header'
             lbl = uilabel(controls,'Text',upper(items(k).label));
-            lbl.FontWeight = 'bold';
-            lbl.FontSize   = 11;
-            lbl.FontColor  = [0.35 0.35 0.38];
-            lbl.Layout.Row = k;
+            lbl.FontWeight    = 'bold';
+            lbl.FontSize      = 11;
+            lbl.FontColor     = [0.35 0.35 0.38];
+            lbl.Layout.Row    = k;
+            lbl.Layout.Column = [1 3];
 
         case 'button'
             btn = uibutton(controls,'Text',items(k).label, ...
                            'ButtonPushedFcn',items(k).callback);
-            btn.Layout.Row = k;
+            btn.Layout.Row    = k;
+            btn.Layout.Column = [1 3];
 
         case 'signal'
-            sigIdx = sigIdx + 1;
-            sigBoxes(sigIdx) = makeCheckbox(k);
+            index = items(k).index;
+            sigBoxes(index) = makeCheckbox(k,1);
+            sigBoxes(index).Tooltip = signals(index).label;
+            makeStyleDropdown(k,index);
+            makeWidthSpinner(k,index);
 
         case 'band'
-            bandIdx = bandIdx + 1;
-            bandBoxes(bandIdx) = makeCheckbox(k);
+            bandBoxes(items(k).index) = makeCheckbox(k,[1 3]);
 
         case 'overlap'
-            overlapBox = makeCheckbox(k);
+            overlapBox = makeCheckbox(k,[1 3]);
 
     end
 
@@ -267,12 +305,58 @@ refreshLegend();
 % Callbacks and helpers (nested — they share the state above)
 % ------------------------------------------------------------------
 
-    function box = makeCheckbox(row)
+    function box = makeCheckbox(row,column)
         box = uicheckbox(controls, ...
                          'Text',items(row).label, ...
                          'Value',logical(items(row).value));
         box.ValueChangedFcn = @(~,~) applyVisibility();
         box.Layout.Row      = row;
+        box.Layout.Column   = column;
+    end
+
+    function makeStyleDropdown(row,index)
+    % Line style for one signal, changeable while the figure is open.
+
+        styles = {'-','--',':','-.','none'};
+        current = signals(index).handle.LineStyle;
+
+        drop = uidropdown(controls, ...
+                          'Items',styles, ...
+                          'Value',pickValue(current,styles), ...
+                          'FontSize',11, ...
+                          'Tooltip','Line style');
+
+        drop.ValueChangedFcn = @(src,~) setLineStyle(index,src.Value);
+        drop.Layout.Row      = row;
+        drop.Layout.Column   = 2;
+
+    end
+
+    function makeWidthSpinner(row,index)
+    % Line width for one signal, in 0.5 steps.
+
+        width = min(max(signals(index).handle.LineWidth,0.5),12);
+
+        spin = uispinner(controls, ...
+                         'Limits',[0.5 12], ...
+                         'Step',0.5, ...
+                         'Value',width, ...
+                         'ValueDisplayFormat','%.1f', ...
+                         'FontSize',11, ...
+                         'Tooltip','Line width');
+
+        spin.ValueChangedFcn = @(src,~) setLineWidth(index,src.Value);
+        spin.Layout.Row      = row;
+        spin.Layout.Column   = 3;
+
+    end
+
+    function setLineStyle(index,style)
+        signals(index).handle.LineStyle = style;
+    end
+
+    function setLineWidth(index,width)
+        signals(index).handle.LineWidth = width;
     end
 
     function applyVisibility()
@@ -348,7 +432,9 @@ refreshLegend();
             handles(end+1) = overlapPatches(1);
         end
 
-        if isempty(handles)
+        % Past a certain number of traces the legend covers the plot and
+        % stops being useful; the panel and the hover tips name them instead.
+        if isempty(handles) || numel(handles) > MAX_LEGEND
             legend(ax,'off');
             return
         end
@@ -568,7 +654,7 @@ end
 
 end
 
-function s = item(kind,label,value,callback)
+function s = item(kind,label,value,callback,index)
 %ITEM  One row of the side panel, described before the grid is built.
 
 if nargin < 3
@@ -579,7 +665,72 @@ if nargin < 4
     callback = [];
 end
 
-s = struct('kind',kind,'label',label,'value',value,'callback',callback);
+if nargin < 5
+    index = 0;      % which signal or band the row controls
+end
+
+s = struct('kind',kind, ...
+           'label',label, ...
+           'value',value, ...
+           'callback',callback, ...
+           'index',index);
+
+end
+
+function group = groupOf(label)
+%GROUPOF  Container a signal came from: 'simOut.SSFlow' -> 'simOut'.
+%
+%   Labels without a dot have no group and share a single heading.
+
+position = strfind(label,'.');
+
+if isempty(position)
+    group = '';
+else
+    group = label(1:position(1)-1);
+end
+
+end
+
+function short = displayLabel(label)
+%DISPLAYLABEL  Label with its group stripped, since the heading shows it.
+
+position = strfind(label,'.');
+
+if isempty(position)
+    short = label;
+else
+    short = label(position(1)+1:end);
+end
+
+end
+
+function nameDataTip(h,label)
+%NAMEDATATIP  Put the signal name in the data tip shown on hover.
+%
+%   The name goes in the row's label rather than its values, so nothing is
+%   stored per sample no matter how long the signal is.
+
+try
+    h.DataTipTemplate.DataTipRows(1).Label = 'Time';
+    h.DataTipTemplate.DataTipRows(2).Label = label;
+catch
+    % Older release without DataTipTemplate; tips still show x and y.
+end
+
+end
+
+function value = pickValue(current,allowed)
+%PICKVALUE  Nearest legal dropdown value for a property read off a line.
+
+value = allowed{1};
+
+for k = 1:numel(allowed)
+    if strcmp(char(current),allowed{k})
+        value = allowed{k};
+        return
+    end
+end
 
 end
 
