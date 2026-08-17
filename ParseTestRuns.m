@@ -60,7 +60,17 @@ for fileIdx = 1:length(csvFiles)
 
         %% READ CSV
 
-        C = readcell(currentFile);
+        % Force every column to plain text on import. Left to auto-detect,
+        % readcell tries to parse timestamp-looking columns (e.g.
+        % 'dd:hh:mm:ss:SSS' logger timestamps) as durations and throws if
+        % the format doesn't match -- text avoids that entirely, and
+        % getMPdata already does its own numeric conversion below.
+        opts = detectImportOptions(currentFile,'FileType','text');
+        opts = setvartype(opts,'char');
+        opts.VariableNamesLine = 0;
+        opts.DataLines = [1 Inf];
+
+        C = readcell(currentFile,opts);
 
         headerRow = string(C(1,:));
 
