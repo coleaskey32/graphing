@@ -1,15 +1,35 @@
 clc;
 clear;
 
-%% MP DEFINITIONS
+%% INPUT CONFIG
+%
+% One row per signal the testbench needs. To change which MPs get pulled
+% for a run, edit this table only -- nothing below it needs to change.
+%
+%   name     -- field name written to the `in` struct (must match what
+%               RTESSAirFlow.slx expects)
+%   mp       -- MP tag to look up in the CSV header (source = 'mp' or
+%               'bit'), or the constant value itself (source = 'const')
+%   cast     -- function handle applied before wrapping in a timeseries
+%               (@double, @uint32, @logical, ...)
+%   source   -- 'mp' to pull from the CSV, 'const' for a fixed value that
+%               isn't logged (e.g. ECP_Active), or 'bit' to pull a single
+%               bit out of a bitpacked MP (e.g. ZeroSpdStart/StoppingStarted
+%               both live in MP 11926)
+%   extra    -- only used by 'bit': the 0-indexed bit number to extract
+%               (bit 0 = LSB). Unused by 'mp'/'const' rows (leave []).
 
-rteAbState_MP         = "11922";
-EOTPress_MP           = "20601";
-EOTCommStatus_MP      = "20602";
-ERReduction_MP        = "20624";
-FeedValve_MP          = "20625";
-ZeroSpdStart_MP       = "11926";
-StoppingStarted_MP    = "11926";
+inputConfig = {
+    % name                mp                  cast       source    extra
+    'rteAbState',         "11922",            @uint32,   'mp',     [];
+    'EOTPress',            "20601",            @double,   'mp',     [];
+    'EOTCommStatus',       "20602",            @uint32,   'mp',     [];
+    'ERReduction',         "20624",            @double,   'mp',     [];
+    'FeedValve',           "20625",            @double,   'mp',     [];
+    'ZeroSpdStart',        "11926",            @logical,  'bit',    5;
+    'StoppingStarted',     "11926",            @logical,  'bit',    20;
+    'ECP_Active',          0,                  @double,   'const',  [];
+};
 
 %% DIRECTORIES
 
@@ -48,48 +68,14 @@ for fileIdx = 1:length(csvFiles)
 
         N = size(dataCells,1);
 
-        %% BUILD INPUT STRUCTURE
-
-        in = struct();
-
-        % Airflows
-        in.eabAirFlow_raw     = getMPdata(dataCells,headerRow,eabAirFlow_MP,N);
-        in.dpsRem0AirFlow_raw = getMPdata(dataCells,headerRow,dpsRem0AirFlow_MP,N);
-        in.dpsRem1AirFlow_raw = getMPdata(dataCells,headerRow,dpsRem1AirFlow_MP,N);
-        in.dpsRem2AirFlow_raw = getMPdata(dataCells,headerRow,dpsRem2AirFlow_MP,N);
-        in.dpsRem3AirFlow_raw = getMPdata(dataCells,headerRow,dpsRem3AirFlow_MP,N);
-
-        % Filter Status
-        in.DPremote0fltstatus_raw = getMPdata(dataCells,headerRow,DPremote0fltstatus_MP,N);
-        in.DPremote1fltstatus_raw = getMPdata(dataCells,headerRow,DPremote1fltstatus_MP,N);
-        in.DPremote2fltstatus_raw = getMPdata(dataCells,headerRow,DPremote2fltstatus_MP,N);
-        in.DPremote3fltstatus_raw = getMPdata(dataCells,headerRow,DPremote3fltstatus_MP,N);
-
-        % Num Units
-        in.dpRemNumUnits_raw = getMPdata(dataCells,headerRow,dpRemNumUnits_MP,N);
-
         %% TIME VECTOR
 
         Ts = 0.1;
         timevals = (0:N-1)' * Ts;
 
-        %% TIMESERIES
+        %% BUILD INPUT STRUCTURE
 
-        in.eabAirFlow = timeseries(in.eabAirFlow_raw,timevals);
-
-        in.dpRem0AirFlow = timeseries(in.dpsRem0AirFlow_raw,timevals);
-        in.dpRem1AirFlow = timeseries(in.dpsRem1AirFlow_raw,timevals);
-        in.dpRem2AirFlow = timeseries(in.dpsRem2AirFlow_raw,timevals);
-        in.dpRem3AirFlow = timeseries(in.dpsRem3AirFlow_raw,timevals);
-
-        in.DPremote0fltstatus = timeseries(uint32(in.DPremote0fltstatus_raw),timevals);
-        in.DPremote1fltstatus = timeseries(uint32(in.DPremote1fltstatus_raw),timevals);
-        in.DPremote2fltstatus = timeseries(uint32(in.DPremote2fltstatus_raw),timevals);
-        in.DPremote3fltstatus = timeseries(uint32(in.DPremote3fltstatus_raw),timevals);
-
-        in.dpRemNumUnits = timeseries(uint32(in.dpRemNumUnits_raw),timevals);
-
-        in.ECP_Active = timeseries(zeros(N,1),timevals);
+        in = buildInputStruct(dataCells,headerRow,timevals,inputConfig);
 
         %% SAVE PARSED TEST RUN
 
@@ -113,8 +99,50 @@ end
 fprintf('Done.\n');
 
 %% ============================================================
-% LOCAL FUNCTION
+% LOCAL FUNCTIONS
 % ============================================================
+
+function in = buildInputStruct(dataCells,headerRow,timevals,inputConfig)
+%BUILDINPUTSTRUCT  Build the `in` struct from an input config table.
+%
+%   Every row of inputConfig becomes one timeseries field on `in`. Add,
+%   remove, or edit rows in inputConfig to change which signals are
+%   pulled -- this function never needs to change.
+
+in = struct();
+N  = numel(timevals);
+
+for k = 1:size(inputConfig,1)
+
+    name   = inputConfig{k,1};
+    mp     = inputConfig{k,2};
+    castFcn = inputConfig{k,3};
+    source = inputConfig{k,4};
+    extra  = inputConfig{k,5};
+
+    switch source
+
+        case 'mp'
+            raw = getMPdata(dataCells,headerRow,mp,N);
+
+        case 'bit'
+            packed = getMPdata(dataCells,headerRow,mp,N);
+            raw    = double(bitget(uint32(packed),extra + 1)); % extra is 0-indexed, bitget is 1-indexed
+
+        case 'const'
+            raw = repmat(mp,N,1);
+
+        otherwise
+            error('buildInputStruct:unknownSource', ...
+                  'Unknown source "%s" for signal "%s".',source,name);
+
+    end
+
+    in.(name) = timeseries(castFcn(raw),timevals);
+
+end
+
+end
 
 function data = getMPdata(dataCells,headerRow,mp,N)
 
