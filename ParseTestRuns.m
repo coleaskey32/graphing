@@ -116,15 +116,14 @@ fprintf('Done.\n');
 function C = readDataGrid(fullpath)
 %READDATAGRID  Read a test-run file as a raw text grid.
 %
-%   Every cell comes back as char, and no date/duration auto-detection
-%   ever runs -- readcell's usual type-sniffing throws on timestamp
-%   columns like 'HH:MM:SS:mmm' because it tries to match them against
-%   'dd:hh:mm:ss' duration formats.
-%
 %   .xlsx cells already carry their own type in the file (text vs.
-%   number), so plain readcell is safe there. .csv is plain text, so the
-%   import options are built by hand -- never through detectImportOptions,
-%   whose own format-sniffing pass is what throws in the first place.
+%   number), so plain readcell is safe there.
+%
+%   .csv is split by hand instead of going through readcell/readtable at
+%   all: even with every VariableType declared 'char', those readers
+%   still try to auto-detect timestamp-looking columns as durations and
+%   throw when a value like 'HH:MM:SS:mmm' doesn't match a 'dd:hh:mm:ss'
+%   format. Plain string splitting has no type detection to misfire.
 
 [~,~,ext] = fileparts(fullpath);
 
@@ -134,23 +133,36 @@ switch lower(ext)
         C = readcell(fullpath);
 
     case '.csv'
-        firstLine = readlines(fullpath,'EmptyLineRule','skip');
-        numCols   = numel(strsplit(char(firstLine(1)),','));
-
-        opts = delimitedTextImportOptions( ...
-            'NumVariables',numCols, ...
-            'Delimiter',',', ...
-            'DataLines',[1 Inf], ...
-            'VariableNamingRule','preserve');
-
-        opts.VariableTypes = repmat({'char'},1,numCols);
-
-        C = readcell(fullpath,opts);
+        C = readCsvAsText(fullpath);
 
     otherwise
         error('readDataGrid:unsupportedType', ...
               'Unsupported file type "%s".',ext);
 
+end
+
+end
+
+function C = readCsvAsText(fullpath)
+%READCSVASTEXT  Split a CSV into a raw cell grid of char, comma by comma.
+
+lines = splitlines(string(fileread(fullpath)));
+lines = lines(strlength(lines) > 0);
+
+nRows   = numel(lines);
+rowCells = cell(nRows,1);
+nCols   = 0;
+
+for k = 1:nRows
+    rowCells{k} = strsplit(char(lines(k)),',');
+    nCols = max(nCols,numel(rowCells{k}));
+end
+
+C = cell(nRows,nCols);
+
+for k = 1:nRows
+    row = rowCells{k};
+    C(k,1:numel(row)) = row;
 end
 
 end
