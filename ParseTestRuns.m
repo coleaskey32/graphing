@@ -8,16 +8,17 @@ clear;
 %
 %   name     -- field name written to the `in` struct (must match what
 %               RTESSAirFlow.slx expects)
-%   mp       -- MP tag to look up in the CSV header (source = 'mp' or
-%               'bit'), or the constant value itself (source = 'const')
+%   mp       -- MP tag to look up in the CSV header (source = 'mp', 'bit',
+%               or 'hex'), or the constant value itself (source = 'const')
 %   cast     -- function handle applied before wrapping in a timeseries
 %               (@double, @uint32, @logical, ...)
 %   source   -- 'mp' to pull from the CSV, 'const' for a fixed value that
-%               isn't logged (e.g. ECP_Active), or 'bit' to pull a single
-%               bit out of a bitpacked MP (e.g. ZeroSpdStart/StoppingStarted
-%               both live in MP 11926)
+%               isn't logged (e.g. ECP_Active), 'bit' to pull a single bit
+%               out of a bitpacked MP (e.g. ZeroSpdStart/StoppingStarted
+%               both live in MP 11926), or 'hex' for an MP that's logged
+%               as a hex string (e.g. "0x00000000") instead of a number
 %   extra    -- only used by 'bit': the 0-indexed bit number to extract
-%               (bit 0 = LSB). Unused by 'mp'/'const' rows (leave []).
+%               (bit 0 = LSB). Unused by 'mp'/'const'/'hex' rows (leave []).
 
 inputConfig = {
     % name                mp                  cast       source    extra
@@ -41,47 +42,47 @@ if ~exist(outputDir,'dir')
     mkdir(outputDir);
 end
 
-%% FIND ALL CSV FILES
+%% FIND ALL TEST RUN FILES
 
-csvFiles = dir(fullfile(dataRoot,'**','*.csv'));
+% MP exports come as either .csv or .xlsx, both laid out the same way
+% (see example.xlsx): row 1 is the MP tag ID header, row 2 is the MP name
+% header, and data starts on row 3 with elapsed timestamps in column 1.
+dataFiles = [dir(fullfile(dataRoot,'**','*.csv')); ...
+             dir(fullfile(dataRoot,'**','*.xlsx'))];
 
-fprintf('Found %d CSV files\n\n',length(csvFiles));
+% Drop Excel's temporary lock files (~$example.xlsx), which look like
+% real workbooks to `dir` but aren't.
+dataFiles = dataFiles(~startsWith({dataFiles.name},'~$'));
+
+fprintf('Found %d test run files\n\n',length(dataFiles));
 
 %% PROCESS EACH FILE
 
-for fileIdx = 1:length(csvFiles)
+for fileIdx = 1:length(dataFiles)
 
     try
 
-        currentFile = fullfile(csvFiles(fileIdx).folder,...
-                               csvFiles(fileIdx).name);
+        currentFile = fullfile(dataFiles(fileIdx).folder,...
+                               dataFiles(fileIdx).name);
 
-        fprintf('Processing %s\n',csvFiles(fileIdx).name);
+        fprintf('Processing %s\n',dataFiles(fileIdx).name);
 
-        %% READ CSV
+        %% READ FILE
 
-        % Force every column to plain text on import. Left to auto-detect,
-        % readcell tries to parse timestamp-looking columns (e.g.
-        % 'dd:hh:mm:ss:SSS' logger timestamps) as durations and throws if
-        % the format doesn't match -- text avoids that entirely, and
-        % getMPdata already does its own numeric conversion below.
-        opts = detectImportOptions(currentFile,'FileType','text');
-        opts = setvartype(opts,'char');
-        opts.VariableNamesLine = 0;
-        opts.DataLines = [1 Inf];
+        C = readDataGrid(currentFile);
 
-        C = readcell(currentFile,opts);
-
+        % Row 1: MP tag IDs (used to find each signal's column below).
+        % Row 2: MP names (informational only -- not data).
+        % Row 3+: samples, with column 1 holding an 'HH:MM:SS:mmm' timestamp.
         headerRow = string(C(1,:));
 
-        dataCells = C(2:end,:);
+        dataCells = C(3:end,:);
 
         N = size(dataCells,1);
 
         %% TIME VECTOR
 
-        Ts = 0.1;
-        timevals = (0:N-1)' * Ts;
+        timevals = parseTimestamps(dataCells(:,1));
 
         %% BUILD INPUT STRUCTURE
 
@@ -89,7 +90,7 @@ for fileIdx = 1:length(csvFiles)
 
         %% SAVE PARSED TEST RUN
 
-        [~,baseName,~] = fileparts(csvFiles(fileIdx).name);
+        [~,baseName,~] = fileparts(dataFiles(fileIdx).name);
 
         saveFile = fullfile(outputDir,[baseName '.mat']);
 
@@ -99,7 +100,7 @@ for fileIdx = 1:length(csvFiles)
 
     catch ME
 
-        fprintf('ERROR processing %s\n',csvFiles(fileIdx).name);
+        fprintf('ERROR processing %s\n',dataFiles(fileIdx).name);
         fprintf('%s\n\n',ME.message);
 
     end
@@ -111,6 +112,59 @@ fprintf('Done.\n');
 %% ============================================================
 % LOCAL FUNCTIONS
 % ============================================================
+
+function C = readDataGrid(fullpath)
+%READDATAGRID  Read a test-run file as a raw text grid.
+%
+%   Every cell comes back as char, and no date/duration auto-detection
+%   ever runs -- readcell's usual type-sniffing throws on timestamp
+%   columns like 'HH:MM:SS:mmm' because it tries to match them against
+%   'dd:hh:mm:ss' duration formats.
+%
+%   .xlsx cells already carry their own type in the file (text vs.
+%   number), so plain readcell is safe there. .csv is plain text, so the
+%   import options are built by hand -- never through detectImportOptions,
+%   whose own format-sniffing pass is what throws in the first place.
+
+[~,~,ext] = fileparts(fullpath);
+
+switch lower(ext)
+
+    case '.xlsx'
+        C = readcell(fullpath);
+
+    case '.csv'
+        firstLine = readlines(fullpath,'EmptyLineRule','skip');
+        numCols   = numel(strsplit(char(firstLine(1)),','));
+
+        opts = delimitedTextImportOptions( ...
+            'Delimiter',',', ...
+            'VariableTypes',repmat({'char'},1,numCols), ...
+            'DataLines',[1 Inf], ...
+            'VariableNamingRule','preserve');
+
+        C = readcell(fullpath,opts);
+
+    otherwise
+        error('readDataGrid:unsupportedType', ...
+              'Unsupported file type "%s".',ext);
+
+end
+
+end
+
+function timevals = parseTimestamps(timeCol)
+%PARSETIMESTAMPS  Convert 'HH:MM:SS:mmm' logger timestamps to elapsed
+%   seconds, starting at 0.
+
+parts = split(string(timeCol),':');   % Nx4: hours, minutes, seconds, ms
+
+seconds = double(parts(:,1))*3600 + double(parts(:,2))*60 + ...
+          double(parts(:,3)) + double(parts(:,4))/1000;
+
+timevals = seconds - seconds(1);
+
+end
 
 function in = buildInputStruct(dataCells,headerRow,timevals,inputConfig)
 %BUILDINPUTSTRUCT  Build the `in` struct from an input config table.
@@ -139,6 +193,9 @@ for k = 1:size(inputConfig,1)
             packed = getMPdata(dataCells,headerRow,mp,N);
             raw    = double(bitget(uint32(packed),extra + 1)); % extra is 0-indexed, bitget is 1-indexed
 
+        case 'hex'
+            raw = getMPhex(dataCells,headerRow,mp,N);
+
         case 'const'
             raw = repmat(mp,N,1);
 
@@ -151,6 +208,42 @@ for k = 1:size(inputConfig,1)
     in.(name) = timeseries(castFcn(raw),timevals);
 
 end
+
+end
+
+function data = getMPhex(dataCells,headerRow,mp,N)
+%GETMPHEX  Like getMPdata, but for MPs logged as hex strings ("0x1A2B")
+%   instead of plain numbers.
+
+    idx = find(headerRow == string(mp),1);
+
+    data = zeros(N,1);
+
+    if isempty(idx)
+        return
+    end
+
+    col = dataCells(:,idx);
+
+    for k = 1:N
+
+        val = col{k};
+
+        if isnumeric(val)
+
+            data(k) = double(val);
+
+        elseif ischar(val) || isstring(val)
+
+            s = regexprep(strtrim(string(val)),'^0[xX]','');
+
+            if strlength(s) > 0
+                data(k) = hex2dec(char(s));
+            end
+
+        end
+
+    end
 
 end
 
