@@ -74,7 +74,11 @@ for fileIdx = 1:length(dataFiles)
         % Row 1: MP tag IDs (used to find each signal's column below).
         % Row 2: MP names (informational only -- not data).
         % Row 3+: samples, with column 1 holding an 'HH:MM:SS:mmm' timestamp.
-        headerRow = string(C(1,:));
+        %
+        % Exports write the tag either bare (8693) or prefixed (MP8693), so
+        % the header is reduced to a plain number before anything is looked
+        % up in it, and the config's tags are reduced the same way.
+        headerRow = normalizeMPTag(cellToString(C(1,:)));
 
         dataCells = C(3:end,:);
 
@@ -86,7 +90,16 @@ for fileIdx = 1:length(dataFiles)
 
         %% BUILD INPUT STRUCTURE
 
-        in = buildInputStruct(dataCells,headerRow,timevals,inputConfig);
+        [in,missing] = buildInputStruct(dataCells,headerRow,timevals,inputConfig);
+
+        % A tag that isn't in this file used to pass silently as a column of
+        % zeros, which looks like a successful parse until the plots are
+        % empty. Say so instead.
+        if ~isempty(missing)
+            fprintf(['  WARNING: %d of %d signals were not found in this ' ...
+                     'file and are zero: %s\n'], ...
+                    numel(missing),size(inputConfig,1),strjoin(missing,', '));
+        end
 
         %% SAVE PARSED TEST RUN
 
@@ -163,6 +176,70 @@ C = cell(nRows,nCols);
 for k = 1:nRows
     row = rowCells{k};
     C(k,1:numel(row)) = row;
+end
+
+end
+
+function keys = normalizeMPTag(tags)
+%NORMALIZEMPTAG  Reduce an MP tag to a plain number for comparison.
+%
+%   Exports label the same measurement point either bare or prefixed, and
+%   the prefix casing varies, so all of these have to compare equal:
+%
+%       8693      "8693"      " 8693 "
+%       MP8693    mp8693      "MP 8693"    "MP_8693"
+%
+%   Tags that are not numeric (a name rather than an ID) are left alone
+%   apart from trimming and case, so they can still be matched by text.
+
+keys = upper(strtrim(string(tags)));
+keys = regexprep(keys,'^["'']+|["'']+$','');   % csv exports may quote fields
+keys = regexprep(keys,'^MP[\s_:#-]*','');
+keys = strtrim(keys);
+
+% Compare numeric tags by value, so 08693 and 8693 are the same tag.
+numeric = str2double(keys);
+isCount = ~isnan(numeric) & numeric == fix(numeric);
+
+keys(isCount) = string(numeric(isCount));
+
+end
+
+function s = cellToString(c)
+%CELLTOSTRING  Convert a raw grid row to text, whatever the cells hold.
+%
+%   xlsx cells arrive as numbers or char, csv cells always as char, and
+%   blanks as [] or missing; string() alone throws on some of those.
+
+s = strings(1,numel(c));
+
+for k = 1:numel(c)
+
+    v = c{k};
+
+    if isempty(v)
+        s(k) = "";
+    elseif isnumeric(v) || islogical(v)
+        s(k) = string(double(v));
+    elseif ischar(v) || isstring(v)
+        s(k) = string(v);
+    else
+        s(k) = "";      % missing, datetime, anything else: not a tag
+    end
+
+end
+
+end
+
+function value = hexValue(text)
+%HEXVALUE  Numeric value of "0x1A2B", or NaN if it isn't hex.
+
+value = NaN;
+
+s = strtrim(string(text));
+
+if ~isempty(regexpi(s,'^0[xX][0-9A-Fa-f]+$','once'))
+    value = hex2dec(char(regexprep(s,'^0[xX]','')));
 end
 
 end
@@ -244,15 +321,20 @@ end
 
 end
 
-function in = buildInputStruct(dataCells,headerRow,timevals,inputConfig)
+function [in,missing] = buildInputStruct(dataCells,headerRow,timevals,inputConfig)
 %BUILDINPUTSTRUCT  Build the `in` struct from an input config table.
 %
 %   Every row of inputConfig becomes one timeseries field on `in`. Add,
 %   remove, or edit rows in inputConfig to change which signals are
 %   pulled -- this function never needs to change.
+%
+%   missing lists the signals whose MP tag was not in this file's header.
+%   Those fields are still created, filled with zeros, so the testbench
+%   always gets a complete `in` struct.
 
-in = struct();
-N  = numel(timevals);
+in      = struct();
+N       = numel(timevals);
+missing = {};
 
 for k = 1:size(inputConfig,1)
 
@@ -262,17 +344,19 @@ for k = 1:size(inputConfig,1)
     source = inputConfig{k,4};
     extra  = inputConfig{k,5};
 
+    found = true;
+
     switch source
 
         case 'mp'
-            raw = getMPdata(dataCells,headerRow,mp,N);
+            [raw,found] = getMPdata(dataCells,headerRow,mp,N);
 
         case 'bit'
-            packed = getMPdata(dataCells,headerRow,mp,N);
+            [packed,found] = getMPdata(dataCells,headerRow,mp,N);
             raw    = double(bitget(uint32(packed),extra + 1)); % extra is 0-indexed, bitget is 1-indexed
 
         case 'hex'
-            raw = getMPhex(dataCells,headerRow,mp,N);
+            [raw,found] = getMPhex(dataCells,headerRow,mp,N);
 
         case 'const'
             raw = repmat(mp,N,1);
@@ -283,21 +367,26 @@ for k = 1:size(inputConfig,1)
 
     end
 
+    if ~found
+        missing{end+1} = sprintf('%s (MP %s)',name,normalizeMPTag(mp)); %#ok<AGROW>
+    end
+
     in.(name) = timeseries(castFcn(raw),timevals);
 
 end
 
 end
 
-function data = getMPhex(dataCells,headerRow,mp,N)
+function [data,found] = getMPhex(dataCells,headerRow,mp,N)
 %GETMPHEX  Like getMPdata, but for MPs logged as hex strings ("0x1A2B")
 %   instead of plain numbers.
 
-    idx = find(headerRow == string(mp),1);
+    idx = find(headerRow == normalizeMPTag(mp),1);
 
-    data = zeros(N,1);
+    data  = zeros(N,1);
+    found = ~isempty(idx);
 
-    if isempty(idx)
+    if ~found
         return
     end
 
@@ -329,11 +418,12 @@ function data = getMPhex(dataCells,headerRow,mp,N)
 
 end
 
-function data = getMPdata(dataCells,headerRow,mp,N)
+function [data,found] = getMPdata(dataCells,headerRow,mp,N)
 
-    idx = find(headerRow == string(mp),1);
+    idx   = find(headerRow == normalizeMPTag(mp),1);
+    found = ~isempty(idx);
 
-    if isempty(idx)
+    if ~found
 
         data = zeros(N,1);
 
@@ -362,6 +452,10 @@ function data = getMPdata(dataCells,headerRow,mp,N)
             elseif ischar(val) || isstring(val)
 
                 numVal = str2double(val);
+
+                if isnan(numVal)
+                    numVal = hexValue(val);   % columns logged as "0x0001"
+                end
 
                 if ~isnan(numVal)
                     data(k) = numVal;
