@@ -168,15 +168,79 @@ end
 end
 
 function timevals = parseTimestamps(timeCol)
-%PARSETIMESTAMPS  Convert 'HH:MM:SS:mmm' logger timestamps to elapsed
-%   seconds, starting at 0.
+%PARSETIMESTAMPS  Convert logger timestamps to elapsed seconds from 0.
+%
+%   The number of colon-separated fields decides how a timestamp is read,
+%   so exports that log milliseconds and exports that don't both work:
+%
+%       HH:MM:SS:mmm    hours, minutes, seconds, milliseconds
+%       HH:MM:SS        no millisecond field
+%       HH:MM:SS.mmm    milliseconds after a decimal point
+%       MM:SS           minutes and seconds
+%       12.345          already elapsed seconds
+%
+%   Anything else raises an error naming the offending value, rather than
+%   failing further down with an index or NaN.
 
-parts = split(string(timeCol),':');   % Nx4: hours, minutes, seconds, ms
+text   = strtrim(string(timeCol(:)));
+fields = splitFields(text);
 
-seconds = double(parts(:,1))*3600 + double(parts(:,2))*60 + ...
-          double(parts(:,3)) + double(parts(:,4))/1000;
+switch size(fields,2)
 
-timevals = seconds - seconds(1);
+    case 1, scale = 1;                      % seconds
+    case 2, scale = [60 1];                 % MM:SS
+    case 3, scale = [3600 60 1];            % HH:MM:SS
+    case 4, scale = [3600 60 1 0.001];      % HH:MM:SS:mmm
+
+    otherwise
+        error('parseTimestamps:tooManyFields', ...
+              ['Timestamp "%s" splits into %d fields; expected at most 4 ' ...
+               '(HH:MM:SS:mmm).'],text(1),size(fields,2));
+
+end
+
+values = double(fields);        % text that is not a number becomes NaN
+
+bad = find(any(isnan(values),2),1);
+
+if ~isempty(bad)
+    error('parseTimestamps:unrecognized', ...
+          ['Could not read timestamp "%s" on data row %d. Expected ' ...
+           'HH:MM:SS:mmm, HH:MM:SS, MM:SS, or plain seconds.'], ...
+          text(bad),bad);
+end
+
+elapsed  = sum(values .* scale,2);
+timevals = elapsed - elapsed(1);
+
+end
+
+function fields = splitFields(text)
+%SPLITFIELDS  Split timestamps on ':' into an N-by-(fields) string array.
+%
+%   Rows with fewer colons than the rest are padded with zeros, so one
+%   short row does not take the whole file down.
+
+n = numel(text);
+
+if n == 1
+    fields = split(text,':').';     % a scalar string splits into a column
+    return
+end
+
+counts = count(text,':');
+
+if all(counts == counts(1))
+    fields = split(text,':');
+    return
+end
+
+fields = repmat("0",n,max(counts)+1);
+
+for k = 1:n
+    part = split(text(k),':').';
+    fields(k,1:numel(part)) = part;
+end
 
 end
 
@@ -243,7 +307,11 @@ function data = getMPhex(dataCells,headerRow,mp,N)
 
         val = col{k};
 
-        if isnumeric(val)
+        if isempty(val)         % short row, padded out by readCsvAsText
+
+            continue
+
+        elseif isnumeric(val)
 
             data(k) = double(val);
 
@@ -279,7 +347,11 @@ function data = getMPdata(dataCells,headerRow,mp,N)
 
             val = col{k};
 
-            if isnumeric(val)
+            if isempty(val)     % short row, padded out by readCsvAsText
+
+                continue
+
+            elseif isnumeric(val)
 
                 data(k) = double(val);
 
